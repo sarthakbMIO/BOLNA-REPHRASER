@@ -29,6 +29,8 @@ export type Job = {
   fields: Field[];
   status: JobStatus;
   docUrl?: string;
+  docError?: string;
+  rephrased?: Rephrased[];
   error?: string;
   completedAt?: string;
 };

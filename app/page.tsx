@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import type { Field } from "@/lib/types";
+import type { Field, Rephrased } from "@/lib/types";
 
 const PRESETS: Record<string, (inst: string) => string> = {
   "Adapt for new institution": (inst) =>
@@ -14,7 +14,28 @@ const PRESETS: Record<string, (inst: string) => string> = {
     "Make every prompt significantly shorter. Remove redundant examples and repeated rules, but keep every distinct rule, override and default.",
 };
 
-type Status = { status: "pending" | "done" | "error"; docUrl: string | null; error: string | null };
+type Status = {
+  status: "pending" | "done" | "error";
+  docUrl: string | null;
+  docError?: string | null;
+  error: string | null;
+  fields?: Field[];
+  rephrased?: Rephrased[];
+};
+
+const box: React.CSSProperties = {
+  whiteSpace: "pre-wrap", fontSize: 13, lineHeight: 1.6, padding: 12, borderRadius: 8,
+  background: "var(--surface-2)", border: "1px solid var(--border)", marginTop: 6,
+};
+
+function asText(name: string, r: { question: string; objective_options?: { value: string; condition: string }[] }) {
+  let t = `NAME:\n${name}\n\nEXTRACTION PROMPT:\n${r.question}\n`;
+  if (r.objective_options?.length) {
+    t += `\nPOSSIBLE ANSWERS:\n`;
+    for (const o of r.objective_options) t += `\nAnswer Value: ${o.value}\nCondition: ${o.condition}\n`;
+  }
+  return t;
+}
 
 export default function Home() {
   const [token, setToken] = useState("");
@@ -32,6 +53,8 @@ export default function Home() {
   const [creating, setCreating] = useState(false);
   const [status, setStatus] = useState<Status | null>(null);
   const [copied, setCopied] = useState(false);
+  const [tab, setTab] = useState(0);
+  const [copiedTab, setCopiedTab] = useState("");
 
   const chosen = useMemo(() => fields.filter((f) => selected.has(f.id)), [fields, selected]);
   const command = jobId ? `Rephrase Bolna job ${jobId}` : "";
@@ -82,7 +105,7 @@ export default function Home() {
       });
       const d = await r.json();
       if (!r.ok) throw new Error(d.error);
-      setJobId(d.id);
+      setJobId(d.id); setTab(0);
       setStatus({ status: "pending", docUrl: null, error: null });
     } catch (e: any) {
       setErr(e.message || "Could not create job.");
@@ -205,13 +228,89 @@ export default function Home() {
             </>
           )}
           {status?.error && status.status !== "done" && <div className="alert warn">{status.error}</div>}
-          {status?.status === "done" && status.docUrl && (
-            <div className="alert ok">
-              Done. <a href={status.docUrl} target="_blank" rel="noreferrer">Open the Google Doc →</a>
-            </div>
-          )}
+          {status?.status === "done" && <Results status={status} tab={tab} setTab={setTab} copiedTab={copiedTab} setCopiedTab={setCopiedTab} jobId={jobId} />}
         </section>
       )}
     </main>
+  );
+}
+
+function Results({ status, tab, setTab, copiedTab, setCopiedTab, jobId }: {
+  status: Status; tab: number; setTab: (n: number) => void;
+  copiedTab: string; setCopiedTab: (s: string) => void; jobId: string;
+}) {
+  const fields = status.fields ?? [];
+  const items = (status.rephrased ?? []).map((r) => ({ r, f: fields.find((x) => x.name === r.name) }));
+  const cur = items[Math.min(tab, items.length - 1)];
+
+  async function copy(key: string, text: string) {
+    await navigator.clipboard.writeText(text);
+    setCopiedTab(key);
+    setTimeout(() => setCopiedTab(""), 1500);
+  }
+
+  function downloadAll() {
+    const body = items.map(({ r }) => asText(r.name, r)).join("\n────────────────────────────────────────\n\n");
+    const blob = new Blob([body], { type: "text/plain;charset=utf-8" });
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = `bolna-rephrase-${jobId}.txt`;
+    a.click();
+    URL.revokeObjectURL(a.href);
+  }
+
+  if (!cur) return <div className="alert ok">Done.</div>;
+
+  return (
+    <div style={{ marginTop: 12 }}>
+      <div className="alert ok" style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+        <span>
+          Done — {items.length} field{items.length === 1 ? "" : "s"} rephrased.
+          {status.docUrl && <> <a href={status.docUrl} target="_blank" rel="noreferrer">Open Google Doc →</a></>}
+        </span>
+        <button className="btn o" onClick={downloadAll}>Download all (.txt)</button>
+      </div>
+
+      <div className="chips" style={{ marginTop: 14 }}>
+        {items.map(({ r }, i) => (
+          <span key={r.name} className={`chip ${i === tab ? "on" : ""}`} onClick={() => setTab(i)}>{r.name}</span>
+        ))}
+      </div>
+
+      <div className="bar" style={{ justifyContent: "space-between" }}>
+        <span className="fname">{cur.r.name}</span>
+        <button className="btn o" onClick={() => copy(cur.r.name, asText(cur.r.name, cur.r))}>
+          {copiedTab === cur.r.name ? "Copied" : "Copy rephrased"}
+        </button>
+      </div>
+
+      <label>Rephrased — extraction prompt</label>
+      <div style={box}>{cur.r.question}</div>
+
+      {!!cur.r.objective_options?.length && (
+        <>
+          <label style={{ marginTop: 12 }}>Rephrased — possible answers</label>
+          <div style={box}>
+            {cur.r.objective_options.map((o) => (
+              <div key={o.value} style={{ marginBottom: 8 }}><b>{o.value}</b> — {o.condition}</div>
+            ))}
+          </div>
+        </>
+      )}
+
+      {cur.r.change_notes && (
+        <>
+          <label style={{ marginTop: 12 }}>What changed</label>
+          <div style={{ ...box, background: "var(--accent-t)" }}>{cur.r.change_notes}</div>
+        </>
+      )}
+
+      {cur.f && (
+        <details style={{ marginTop: 14 }}>
+          <summary className="muted" style={{ cursor: "pointer" }}>Show original</summary>
+          <div style={box}>{asText(cur.f.name, cur.f)}</div>
+        </details>
+      )}
+    </div>
   );
 }

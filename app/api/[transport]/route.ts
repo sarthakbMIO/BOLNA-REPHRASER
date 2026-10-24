@@ -41,7 +41,7 @@ const handler = createMcpHandler(
       async ({ job_id }) => {
         const job = await getJob(job_id);
         if (!job) return text(`Job ${job_id} not found or expired.`, true);
-        if (job.status === "done") return text(`Job ${job.id} is already done: ${job.docUrl}`);
+        if (job.status === "done") return text(`Job ${job.id} is already done. Results are on the web page${job.docUrl ? ` and in ${job.docUrl}` : ""}.`);
         return text(
           JSON.stringify(
             {
@@ -65,7 +65,7 @@ const handler = createMcpHandler(
 
     server.tool(
       "submit_rephrased",
-      "Submit the rephrased fields for a job. The server checks that answer values are unchanged and every field is present, then writes a Google Doc with one tab per field and returns its link. If problems are returned, fix them and submit again.",
+      "Submit the rephrased fields for a job. The server checks that answer values are unchanged and every field is present, then saves the results so they appear on the web page (and in a Google Doc if Google is configured). If problems are returned, fix them and submit again.",
       {
         job_id: z.string(),
         fields: z
@@ -85,20 +85,28 @@ const handler = createMcpHandler(
       async ({ job_id, fields }) => {
         const job = await getJob(job_id);
         if (!job) return text(`Job ${job_id} not found or expired.`, true);
-        if (job.status === "done") return text(`Job ${job.id} is already done: ${job.docUrl}`);
+        if (job.status === "done") return text(`Job ${job.id} is already done. Results are on the web page${job.docUrl ? ` and in ${job.docUrl}` : ""}.`);
 
         const problems = validateRephrased(job, fields);
         if (problems.length) {
           return text(`Not saved. Fix these and submit again:\n- ${problems.join("\n- ")}`, true);
         }
 
+        // Results are saved first, so nothing is lost even if Google Docs is not set up.
+        const done = { ...job, status: "done" as const, rephrased: fields, completedAt: new Date().toISOString() };
+        await saveJob(done);
+
+        const googleReady = !!(process.env.GOOGLE_REFRESH_TOKEN || process.env.GOOGLE_SERVICE_ACCOUNT_JSON);
+        if (!googleReady) {
+          return text(`Done. ${fields.length} field(s) saved. The results are now visible on the web page for job ${job.id}.`);
+        }
         try {
           const docUrl = await createJobDoc(job, fields);
-          await saveJob({ ...job, status: "done", docUrl, completedAt: new Date().toISOString() });
-          return text(`Done. Google Doc created: ${docUrl}`);
+          await saveJob({ ...done, docUrl });
+          return text(`Done. Results are on the web page, and a Google Doc was created: ${docUrl}`);
         } catch (e: any) {
-          await saveJob({ ...job, error: e?.message || "Doc creation failed" });
-          return text(`Rephrasing passed checks, but the Google Doc could not be created: ${e?.message}`, true);
+          await saveJob({ ...done, docError: e?.message || "Doc creation failed" });
+          return text(`Done. Results are saved on the web page. The Google Doc could not be created: ${e?.message}`);
         }
       }
     );

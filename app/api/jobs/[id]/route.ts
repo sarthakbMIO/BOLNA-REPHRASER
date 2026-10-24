@@ -7,5 +7,14 @@ export async function GET(_req: Request, { params }: { params: Promise<{ id: str
   const { id } = await params;
   const job = await getJob(id);
   if (!job) return NextResponse.json({ error: "Job not found or expired." }, { status: 404 });
-  return NextResponse.json({ id: job.id, status: job.status, docUrl: job.docUrl ?? null, error: job.error ?? null });
+  return NextResponse.json({
+    id: job.id,
+    status: job.status,
+    docUrl: job.docUrl ?? null,
+    docError: job.docError ?? null,
+    error: job.error ?? null,
+    instruction: job.instruction,
+    fields: job.status === "done" ? job.fields : [],
+    rephrased: job.rephrased ?? [],
+  });
 }
